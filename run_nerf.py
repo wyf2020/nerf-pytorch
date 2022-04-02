@@ -20,7 +20,7 @@ from load_LINEMOD import load_LINEMOD_data
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+np.random.seed(0) #保证程序运行结果可重复
 DEBUG = False
 
 
