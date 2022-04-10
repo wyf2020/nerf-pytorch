@@ -24,7 +24,7 @@ np.random.seed(0) #保证程序运行结果可重复
 DEBUG = False
 
 
-def batchify(fn, chunk):
+def batchify(fn, chunk): # 返回一个函数,该函数每次将输入中的chunk个点传进model,输出这chunk个点的RGBalpha
     """Constructs a version of 'fn' that applies to smaller batches.
     """
     if chunk is None:
@@ -34,29 +34,31 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64): 
     """Prepares inputs and applies network 'fn'.
     """
-    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded = embed_fn(inputs_flat)
+    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]]) # 这里inputs的格式是[N_rays, N_samples, 3], 将rays和每条rays上的采样点合成一维,变成inputs_flat
+    embedded = embed_fn(inputs_flat) # 将每个点的xyz进行position encoding
 
-    if viewdirs is not None:
+    if viewdirs is not None: # 如果输入model的每个点是5维而不是3维,那么把theta和phi两维也进行position encoding
         input_dirs = viewdirs[:,None].expand(inputs.shape)
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
-    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
+    outputs_flat = batchify(fn, netchunk)(embedded) # 将inputs中每个点经过model变成RGBalpha
+    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]]) # outputs的格式为[N_rays, N_samples, 4], 其中4为RGBalpha
     return outputs
 
 
-def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
+def batchify_rays(rays_flat, chunk=1024*32, **kwargs): # **kwargs是可变长字典,里面的内容包括model,是否有important采样,采样点位置的选取是否加噪音,是否是白色背景
     """Render rays in smaller minibatches to avoid OOM.
     """
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], **kwargs)
+        ret = render_rays(rays_flat[i:i+chunk], **kwargs) 
+        # 这里rays_flat的格式是[N_rays,7或9], 第二维长度为7或9,分别是[rays_o, rays_d, near, far(, viewdirs)], 其中viewdirs之所以不和rays_d一样,是为了生成一种固定视角,但改变viewdir的视频
+        # 一次渲染chunk条光线
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
