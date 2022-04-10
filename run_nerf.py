@@ -40,7 +40,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]]) # 这里inputs的格式是[N_rays, N_samples, 3], 将rays和每条rays上的采样点合成一维,变成inputs_flat
     embedded = embed_fn(inputs_flat) # 将每个点的xyz进行position encoding
 
-    if viewdirs is not None: # 如果输入model的每个点是5维而不是3维,那么把theta和phi两维也进行position encoding
+    if viewdirs is not None: # 如果输入model的每个点是6维而不是3维,那么把viewdirs的三维也进行position encoding
         input_dirs = viewdirs[:,None].expand(inputs.shape)
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
@@ -57,7 +57,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs): # **kwargs是可变长字
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
         ret = render_rays(rays_flat[i:i+chunk], **kwargs) 
-        # 这里rays_flat的格式是[N_rays,7或9], 第二维长度为7或9,分别是[rays_o, rays_d, near, far(, viewdirs)], 其中viewdirs之所以不和rays_d一样,是为了生成一种固定视角,但改变viewdir的视频
+        # 这里rays_flat的格式是[N_rays,8或11], 第二维长度为8或11,分别是[rays_o, rays_d, near, far(, viewdirs)], 其中viewdirs之所以不和rays_d一样,是为了生成一种固定视角,但改变viewdir的视频
         # 一次渲染chunk条光线
         for k in ret:
             if k not in all_ret:
@@ -71,7 +71,8 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs): # **kwargs是可变长字
 def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
                   near=0., far=1.,
                   use_viewdirs=False, c2w_staticcam=None,
-                  **kwargs):
+                  **kwargs): 
+# 输入一张图或世界坐标系下的N条光线, 如果是一张图则在函数中变换到世界坐标系, 返回这N条光线对应的RGB,深度,光线被遮挡的概率,以及coarse model的RGB等包含在extras dict里的信息
     """Render rays
     Args:
       H: int. Height of image in pixels.
@@ -104,25 +105,25 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     if use_viewdirs:
         # provide ray directions as input
         viewdirs = rays_d
-        if c2w_staticcam is not None:
+        if c2w_staticcam is not None: # 如果渲染固定视角,但改变viewdirs的多张图片,那么c2w_staticcam为固定的视角, c2w在多次调用中分别为改变的viewdir
             # special case to visualize effect of viewdirs
             rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
-        viewdirs = torch.reshape(viewdirs, [-1,3]).float()
+        viewdirs = torch.reshape(viewdirs, [-1,3]).float() # 如果是rays变量过来的viewdirs,则不需要reshape; 这里的reshape是为了将get_rays函数生成的 格式为[H,W,3]的rays_d转换为[H*W,3]
 
     sh = rays_d.shape # [..., 3]
     if ndc:
         # for forward facing scenes
-        rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
+        rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d) # 将每条光线的坐标从世界的xyz坐标系 变换到 世界的ndc坐标系
 
     # Create ray batch
     rays_o = torch.reshape(rays_o, [-1,3]).float()
     rays_d = torch.reshape(rays_d, [-1,3]).float()
 
     near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
-    rays = torch.cat([rays_o, rays_d, near, far], -1)
+    rays = torch.cat([rays_o, rays_d, near, far], -1) # rays格式为[N, 8]
     if use_viewdirs:
-        rays = torch.cat([rays, viewdirs], -1)
+        rays = torch.cat([rays, viewdirs], -1) # rays格式为[N, 11]
 
     # Render and reshape
     all_ret = batchify_rays(rays, chunk, **kwargs)
@@ -137,7 +138,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 
 
 def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
-
+# 输入N个真实或虚拟的相机内外参, 分别渲染每个相机的整张图像,并存储图片
     H, W, focal = hwf
 
     if render_factor!=0:
@@ -146,14 +147,14 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         W = W//render_factor
         focal = focal/render_factor
 
-    rgbs = []
+    rgbs = [] # rgbs初始化为list
     disps = []
 
     t = time.time()
-    for i, c2w in enumerate(tqdm(render_poses)):
+    for i, c2w in enumerate(tqdm(render_poses)): # tqdm() 用于生成渲染时的进度条
         print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs) # c2w原来的格式是[3,5], 只有[3,4]的部分是需要渲染的render_pose
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
         if i==0:
@@ -171,7 +172,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             imageio.imwrite(filename, rgb8)
 
 
-    rgbs = np.stack(rgbs, 0)
+    rgbs = np.stack(rgbs, 0) # 由于rgbs为list, 需要变成一个np.array
     disps = np.stack(disps, 0)
 
     return rgbs, disps
