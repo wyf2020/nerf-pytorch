@@ -203,20 +203,20 @@ def ndc_rays(H, W, focal, near, rays_o, rays_d):
 # Hierarchical sampling (section 5.2)
 def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     # Get pdf
-    weights = weights + 1e-5 # prevent nans
+    weights = weights + 1e-5 # prevent nans # weight的格式为[N_rays, N_samples-2] "-2"是因为该函数输入的参数是weights[...,1:-1]
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
-    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
+    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins)) # 即[N_rays, N_samples]
 
     # Take uniform samples
-    if det:
+    if det: # 如果z_vals没有噪音
         u = torch.linspace(0., 1., steps=N_samples)
-        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+        u = u.expand(list(cdf.shape[:-1]) + [N_samples]) # 将u从[N_samples]变为[N_rays, N_samples]
     else:
-        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+        u = torch.rand(list(cdf.shape[:-1]) + [N_samples]) # 得到[N_rays, N_samples]个[0,1]随机数
 
     # Pytest, overwrite u with numpy's fixed random numbers
-    if pytest:
+    if pytest: # u的生成改用随机数种子0, 使结果具有一致性
         np.random.seed(0)
         new_shape = list(cdf.shape[:-1]) + [N_samples]
         if det:
@@ -227,21 +227,21 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
         u = torch.Tensor(u)
 
     # Invert CDF
-    u = u.contiguous()
-    inds = torch.searchsorted(cdf, u, right=True)
-    below = torch.max(torch.zeros_like(inds-1), inds-1)
-    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+    u = u.contiguous() # 改变数组在内存中的顺序,防止 RuntimeError: input is not contiguous
+    inds = torch.searchsorted(cdf, u, right=True) # 对每个u[i]返回一个cdf数组的编号f(i),使得cdf[f(i)-1] <= u[i] < cdf[f(i)]
+    below = torch.max(torch.zeros_like(inds-1), inds-1) # below为inds-1,并且限制其大于等于0
+    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds) # above为inds,并且限制其小于等于N-1
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2) # 拼接below,above
 
     # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
     # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
-    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
-    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
-
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]] # matched_shape = (N_rays, N_samples, N_samples)
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g) # cdf_g格式为[N_rays, N_samples, 2],其中cdf_g[i][j][k] = cdf[i][j][inds_g[i][j][k]]
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g) # bins_g格式同上
+    
     denom = (cdf_g[...,1]-cdf_g[...,0])
     denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
     t = (u-cdf_g[...,0])/denom
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
-
+    ''' + t * (bins_g[...,1]-bins_g[...,0])使密集的部分也均匀采样,避免直接使用同样的bins_g[...,0]'''
     return samples

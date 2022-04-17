@@ -388,7 +388,7 @@ def render_rays(ray_batch,
 
 
     # raw = run_network(pts)
-    raw = network_query_fn(pts, viewdirs, network_fn) # 输入[N_rays,N_samples,3],[N_rays,N_samples,3],模型;输出[N_rays,N_samples,RGBa]
+    raw = network_query_fn(pts, viewdirs, network_fn) # 输入[N_rays,N_samples,3],[N_rays,N_samples,3],模型; 输出[N_rays,N_samples,RGBa]
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest) # 输入[N_rays,N_samples,RGBa], 输出[N_rays,RGB],[N_rays,disp],[N_rays,acc],[N_rays,N_samples],[N_rays,depth]
 
     if N_importance > 0:
@@ -396,10 +396,12 @@ def render_rays(ray_batch,
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
-        z_samples = z_samples.detach()
+        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest) # 根据weight,在weight越大的地方采样越密集
+        z_samples = z_samples.detach() # 不需要计算z_samples的梯度,所以用.detach()函数
 
-        z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
+        z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1) 
+        # important模型输入N_samples + N_importance个点
+        # torch.sort() 返回第二个参数是排序后的结果在排序前的index, 不需要这个返回值
         pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
 
         run_fn = network_fn if network_fine is None else network_fine
@@ -409,16 +411,16 @@ def render_rays(ray_batch,
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
-    if retraw:
+    if retraw: # 如果需要返回每个点的RGBa
         ret['raw'] = raw
     if N_importance > 0:
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
-        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
+        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays] # 返回根据weight采样点的方差, 如果需要转换成sdf表示,那么可以反映该光线sdf位置的可信程度
 
     for k in ret:
-        if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
+        if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG: # .any() 函数 return Ture if any item is true
             print(f"! [Numerical Error] {k} contains nan or inf.")
 
     return ret
