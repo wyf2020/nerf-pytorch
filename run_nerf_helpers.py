@@ -241,7 +241,13 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     
     denom = (cdf_g[...,1]-cdf_g[...,0])
     denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
-    t = (u-cdf_g[...,0])/denom
+    t = (u-cdf_g[...,0])/denom 
+    # 由于cdf_g由gather函数得来(cdf[...,0] <= u[i] < cdf[...,1]),所以保证对[N_rays, N_samples]个u,有(u-cdf_g[...,0] > 0)恒成立
+    #所以t = (u-cdf_g[...,0])/denom 即为 (u-cdf_g[...,0])/(cdf[...,1]-cdf[...,0]), 表示均匀采样点u在各个cdf_g区间内超出左端点的距离占整个区间的百分比
+    '''
+    这里bins_g可以看做在CDF的值域均匀采样后,将每个采样点逆映射到CDF的定义域后,各个点所在的定义域中均匀等距区间
+    如果简单的取bins_g[...,0]作为samples,则会出现CDF斜率很大时,很多值域均匀采样的点逆映射到同一个定义域等距区间,导致连续几个samples坐标相同
+    于是计算各个值域中均匀采样的点超出其所在值域区间左端点的程度t(范围[0,1]),用于计算定义域中同一个等距区间里不同点的具体位置
+    '''
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
-    ''' + t * (bins_g[...,1]-bins_g[...,0])使密集的部分也均匀采样,避免直接使用同样的bins_g[...,0]'''
     return samples
