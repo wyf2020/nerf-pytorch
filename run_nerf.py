@@ -30,11 +30,11 @@ def batchify(fn, chunk): # 返回一个函数,该函数每次将输入中的chun
     if chunk is None:
         return fn
     def ret(inputs):
-        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
+        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0) # 这里相当于调用model(), 效果主要是调用model.forward()的效果,但是pytorch的实现让它还做了一些额外的事
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64): 
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64): # 函数的内容是调用position coding再调用model,返回model的输出
     """Prepares inputs and applies network 'fn'.
     """
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]]) # 这里inputs的格式是[N_rays, N_samples, 3], 将rays和每条rays上的采样点合成一维,变成inputs_flat
@@ -42,12 +42,12 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
 
     if viewdirs is not None: # 如果输入model的每个点是6维而不是3维,那么把viewdirs的三维也进行position encoding
         input_dirs = viewdirs[:,None].expand(inputs.shape)
-        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
+        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]]) #把除最后一维外的拼接成一维
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
     outputs_flat = batchify(fn, netchunk)(embedded) # 将inputs中每个点经过model变成RGBalpha
-    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]]) # outputs的格式为[N_rays, N_samples, 4], 其中4为RGBalpha
+    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]]) # outputs的格式为再变换为[N_rays, N_samples, 4], 其中4为RGBalpha
     return outputs
 
 
@@ -59,7 +59,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs): # **kwargs是可变长字
         ret = render_rays(rays_flat[i:i+chunk], **kwargs) 
         # 这里rays_flat的格式是[N_rays,8或11], 第二维长度为8或11,分别是[rays_o, rays_d, near, far(, viewdirs)], 其中viewdirs之所以不和rays_d一样,是为了生成一种固定视角,但改变viewdir的视频
         # 一次渲染chunk条光线
-        for k in ret:
+        for k in ret: # 这里的ret是一个dictionary,根据**kwargs不同有3-8个key,至少有3个key,分别为rgb_map,disp_map,acc_map,内容是chunk条rays的rgb,深度,该光线被遮挡的概率
             if k not in all_ret:
                 all_ret[k] = []
             all_ret[k].append(ret[k])
@@ -72,7 +72,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
                   near=0., far=1.,
                   use_viewdirs=False, c2w_staticcam=None,
                   **kwargs): 
-# 输入一张图或世界坐标系下的N条光线, 如果是一张图则在函数中变换到世界坐标系, 返回这N条光线对应的RGB,深度,光线被遮挡的概率,以及coarse model的RGB等包含在extras dict里的信息
+# 输入一张图或世界坐标系下的N条光线, (如果是一张图则先在函数中变换到世界坐标系), 返回这N条光线对应的RGB,深度,光线被遮挡的概率,以及coarse model的RGB等包含在extras dict里的信息
     """Render rays
     Args:
       H: int. Height of image in pixels.
@@ -141,7 +141,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 # 输入N个真实或虚拟的相机内外参, 分别渲染每个相机的整张图像,并存储图片
     H, W, focal = hwf
 
-    if render_factor!=0:
+    if render_factor!=0: # 这里下采样的过程待看
         # Render downsampled for speed
         H = H//render_factor
         W = W//render_factor
@@ -155,19 +155,19 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         print(i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs) # c2w原来的格式是[3,5], 只有[3,4]的部分是需要渲染的render_pose
-        rgbs.append(rgb.cpu().numpy())
+        rgbs.append(rgb.cpu().numpy()) # .cpu().numpy()将tensor格式的数据转换为numpy格式
         disps.append(disp.cpu().numpy())
         if i==0:
             print(rgb.shape, disp.shape)
 
         """
-        if gt_imgs is not None and render_factor==0:
+        if gt_imgs is not None and render_factor==0: # 如果有gt, 这里计算渲染结果的PSNR,因为这里rgb最大值为1,所以这里计算psnr的公式里没有出现(max_i)^2
             p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_imgs[i])))
             print(p)
         """
 
         if savedir is not None:
-            rgb8 = to8b(rgbs[-1])
+            rgb8 = to8b(rgbs[-1]) # 这里to8b是自定义的lambda函数,将0-1的浮点转换为0-255的整数,用于生成图像
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
             imageio.imwrite(filename, rgb8)
 
@@ -181,18 +181,18 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
-    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
-
+    embed_fn, input_ch = get_embedder(args.multires, args.i_embed) # 如果i=0则不position coding,i=1则position coding; multires是一个坐标position coding生成multires个坐标
+    
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-    output_ch = 5 if args.N_importance > 0 else 4
+        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed) # 对viewdir进行编码
+    output_ch = 5 if args.N_importance > 0 else 4 # 这行是错的 正确的应该是任何情况都output_ch = 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-    grad_vars = list(model.parameters())
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device) # 调用NeRF的__init__函数初始化 #这里的.to(device)把模型移到GPU
+    grad_vars = list(model.parameters()) # 返回该模型所有的参数, 默认所有的参数都需要梯度优化
 
     model_fine = None
     if args.N_importance > 0:
@@ -204,10 +204,10 @@ def create_nerf(args):
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
                                                                 embed_fn=embed_fn,
                                                                 embeddirs_fn=embeddirs_fn,
-                                                                netchunk=args.netchunk)
+                                                                netchunk=args.netchunk) # 集成一个lambda函数,输入[..., 3]xyz和[...,3]viewdir,返回模型输出的各点rgb alpha
 
     # Create optimizer
-    optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+    optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999)) # 输入Adam的参数learning rate,两个beta
 
     start = 0
     basedir = args.basedir
@@ -216,29 +216,29 @@ def create_nerf(args):
     ##########################
 
     # Load checkpoints
-    if args.ft_path is not None and args.ft_path!='None':
+    if args.ft_path is not None and args.ft_path!='None': # 加载指定的checkpoint
         ckpts = [args.ft_path]
-    else:
+    else: # 如果没有指定,按迭代次数排序加载checkpoint文件
         ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
 
     print('Found ckpts', ckpts)
     if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
+        ckpt_path = ckpts[-1] # 选择迭代次数最多的checkpoint或唯一的那一个checkpoint
         print('Reloading from', ckpt_path)
         ckpt = torch.load(ckpt_path)
 
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        start = ckpt['global_step'] # 加载迭代次数
+        optimizer.load_state_dict(ckpt['optimizer_state_dict']) # 加载优化器的状态
 
         # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
+        model.load_state_dict(ckpt['network_fn_state_dict']) # 加载模型的参数
         if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+            model_fine.load_state_dict(ckpt['network_fine_state_dict']) # 加载important模型的参数
 
     ##########################
 
     render_kwargs_train = {
-        'network_query_fn' : network_query_fn,
+        'network_query_fn' : network_query_fn,  
         'perturb' : args.perturb,
         'N_importance' : args.N_importance,
         'network_fine' : model_fine,
@@ -258,11 +258,12 @@ def create_nerf(args):
     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
+    '''test渲染时需要将两个噪音关掉,其中perturb是采样点坐标选取时加的噪音, raw_noise_std是模型输出alpha上加的噪音'''
 
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False): # 体渲染的过程 输入每条光线上每个点的rgb alpha, 输出每条光线的rgb,1/深度,遮挡概率,各点终止概率,深度
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
@@ -277,33 +278,34 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     """
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
-    dists = z_vals[...,1:] - z_vals[...,:-1]
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
+    dists = z_vals[...,1:] - z_vals[...,:-1] # 得到每个sample点到下一个sample点的间距,共num_samples-1个
+    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples] # 最后补一个正无穷的区间长度
 
     dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
+    '''因为算出raw的pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None], 所以这里需要对每条线的间距再乘rays_d的模长,使其'''
 
-    rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
+    rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3] # 将rgb映射到[0,1]
     noise = 0.
     if raw_noise_std > 0.:
-        noise = torch.randn(raw[...,3].shape) * raw_noise_std
+        noise = torch.randn(raw[...,3].shape) * raw_noise_std # 对每个alpha生成一个方差为raw_noise_std的噪音
 
         # Overwrite randomly sampled data if pytest
         if pytest:
-            np.random.seed(0)
+            np.random.seed(0) # 如果pytest=True, 用随机种子,保证结果一致性
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
-    alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+    alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples] # 先把(密度+噪音)取relu得到新密度,再用新密度加间距得到光线终止于该点的概率
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
-    rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1] # 每条光线得到N_sample个权重,分别为终止于第i个点的概率
+    rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3] # 用weight和各点rgb求rgb期望
 
-    depth_map = torch.sum(weights * z_vals, -1)
-    disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
-    acc_map = torch.sum(weights, -1)
+    depth_map = torch.sum(weights * z_vals, -1) # 求出深度期望
+    disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1)) # 求1/深度的期望,为了避免除0,使用max函数
+    acc_map = torch.sum(weights, -1) # 每条光线被遮挡住的概率
 
     if white_bkgd:
-        rgb_map = rgb_map + (1.-acc_map[...,None])
+        rgb_map = rgb_map + (1.-acc_map[...,None]) # 如果是白色背景,rgb的期望增加一项"透过概率*白色"
 
     return rgb_map, disp_map, acc_map, weights, depth_map
 
@@ -351,27 +353,28 @@ def render_rays(ray_batch,
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
     """
+    '''这里rays_flat的格式是[N_rays,8或11], 第二维长度为8或11,分别是[rays_o, rays_d, near, far(, viewdirs)]'''
     N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
     viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
     bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2])
-    near, far = bounds[...,0], bounds[...,1] # [-1,1]
+    near, far = bounds[...,0], bounds[...,1] # [-1,1,1] each
 
     t_vals = torch.linspace(0., 1., steps=N_samples)
     if not lindisp:
-        z_vals = near * (1.-t_vals) + far * (t_vals)
+        z_vals = near * (1.-t_vals) + far * (t_vals) # 将[0,1]映射到[near,far]
     else:
-        z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
+        z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals)) # 使1/z_vals为[1/far,1/near]中线性的N_samples个点
 
-    z_vals = z_vals.expand([N_rays, N_samples])
+    z_vals = z_vals.expand([N_rays, N_samples]) # pytorch中的函数,使从[N_rays,1,Nsamples]变为[N_rays, N_samples]
 
     if perturb > 0.:
         # get intervals between samples
-        mids = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        upper = torch.cat([mids, z_vals[...,-1:]], -1)
-        lower = torch.cat([z_vals[...,:1], mids], -1)
+        mids = .5 * (z_vals[...,1:] + z_vals[...,:-1]) # 得到N_samples-1个区间的中点
+        upper = torch.cat([mids, z_vals[...,-1:]], -1) # 每个采样区间的上界 共N_samples个区间
+        lower = torch.cat([z_vals[...,:1], mids], -1) # 下界
         # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
+        t_rand = torch.rand(z_vals.shape) # 生成N_sample个[0,1]随机数
 
         # Pytest, overwrite u with numpy's fixed random numbers
         if pytest:
@@ -379,14 +382,14 @@ def render_rays(ray_batch,
             t_rand = np.random.rand(*list(z_vals.shape))
             t_rand = torch.Tensor(t_rand)
 
-        z_vals = lower + (upper - lower) * t_rand
+        z_vals = lower + (upper - lower) * t_rand # 得到N_samples个区间分别随机取的一个点
 
-    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
+    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3] # 由于rays_o和rays_d是每条[N_rays,3],需要加一维变成[N_rays,N_samples,3];同理z_vals也需要加一维
 
 
-#     raw = run_network(pts)
-    raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    # raw = run_network(pts)
+    raw = network_query_fn(pts, viewdirs, network_fn) # 输入[N_rays,N_samples,3],[N_rays,N_samples,3],模型;输出[N_rays,N_samples,RGBa]
+    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest) # 输入[N_rays,N_samples,RGBa], 输出[N_rays,RGB],[N_rays,disp],[N_rays,acc],[N_rays,N_samples],[N_rays,depth]
 
     if N_importance > 0:
 

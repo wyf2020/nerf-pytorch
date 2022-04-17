@@ -6,9 +6,9 @@ import numpy as np
 
 
 # Misc
-img2mse = lambda x, y : torch.mean((x - y) ** 2)
-mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
-to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
+img2mse = lambda x, y : torch.mean((x - y) ** 2) # 计算两个图像的mse(均方误差)
+mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.])) # 这里的x一般为img2mse(x,y),该函数进一步计算两个图像的PSNR
+to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8) # 把rgb从[0,1]浮点变成[0,255]整数
 
 
 # Positional encoding (section 5.1)
@@ -21,18 +21,21 @@ class Embedder:
         embed_fns = []
         d = self.kwargs['input_dims']
         out_dim = 0
-        if self.kwargs['include_input']:
+        if self.kwargs['include_input']: # 是否包括输入的坐标
             embed_fns.append(lambda x : x)
             out_dim += d
             
         max_freq = self.kwargs['max_freq_log2']
         N_freqs = self.kwargs['num_freqs']
-        
+        '''如果log_sampling则在[1,2^(multires-1)]对数采样,反之则线性采样'''
         if self.kwargs['log_sampling']:
             freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
         else:
             freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
-            
+        '''
+        生成一个embed_fns这样一个list,里面有2*multires或2*multires+1个(2来自sin,cos)lambda函数,用来position coding
+        out_dim = input_dims*2*multires或input_dims*(2*multires+1) 取决于position coding后是否包括输入的坐标
+        '''
         for freq in freq_bands:
             for p_fn in self.kwargs['periodic_fns']:
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
@@ -41,26 +44,26 @@ class Embedder:
         self.embed_fns = embed_fns
         self.out_dim = out_dim
         
-    def embed(self, inputs):
+    def embed(self, inputs): # 生成依次用embed_fns的函数生成position coding后的坐标,并在最后一维拼接起来
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
-def get_embedder(multires, i=0):
+def get_embedder(multires, i=0): 
     if i == -1:
         return nn.Identity(), 3
     
     embed_kwargs = {
                 'include_input' : True,
                 'input_dims' : 3,
-                'max_freq_log2' : multires-1,
+                'max_freq_log2' : multires-1, # position coding频率范围为[1,2^(multires-1)]
                 'num_freqs' : multires,
-                'log_sampling' : True,
+                'log_sampling' : True, 
                 'periodic_fns' : [torch.sin, torch.cos],
     }
     
     embedder_obj = Embedder(**embed_kwargs)
-    embed = lambda x, eo=embedder_obj : eo.embed(x)
-    return embed, embedder_obj.out_dim
+    embed = lambda x, eo=embedder_obj : eo.embed(x) # 把成员函数变成公用的lambda函数
+    return embed, embedder_obj.out_dim # 返回embed函数和输出维数
 
 
 # Model
@@ -75,23 +78,26 @@ class NeRF(nn.Module):
         self.input_ch_views = input_ch_views
         self.skips = skips
         self.use_viewdirs = use_viewdirs
-        
+        '''
+        nn.linear是pytorch的一个仿射变换层
+        论文中带viewdir的MLP一共有11层,10个隐含层.
+        '''
         self.pts_linears = nn.ModuleList(
             [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
-        
+        # 这行初始化前8个层,其中第6个变换的输入并需要并上输入
         ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
         self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W, W//2)])
-
+        # 这是第10层,256并上3或24个view,输出128
         ### Implementation according to the paper
         # self.views_linears = nn.ModuleList(
         #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
         
         if use_viewdirs:
-            self.feature_linear = nn.Linear(W, W)
-            self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
+            self.feature_linear = nn.Linear(W, W) # 第9层的一部分
+            self.alpha_linear = nn.Linear(W, 1) # 第9层的另一部分,生成alpha
+            self.rgb_linear = nn.Linear(W//2, 3) # 第11层 输出rgb
         else:
-            self.output_linear = nn.Linear(W, output_ch)
+            self.output_linear = nn.Linear(W, output_ch) # 如果没有viewdir 则只有前面初始化的8层加这一层,输出4个或5个, 为什么会有5个呢? 这里应该只有4个的情况 前面run_nerf.py写错了,在github的issue上查到了已经有人提出过这个问题了.
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
@@ -99,22 +105,22 @@ class NeRF(nn.Module):
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
             h = F.relu(h)
-            if i in self.skips:
+            if i in self.skips: # 如果是第6层,需要拼接输入
                 h = torch.cat([input_pts, h], -1)
 
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
-            feature = self.feature_linear(h)
-            h = torch.cat([feature, input_views], -1)
+            feature = self.feature_linear(h) # 第9层无激活函数
+            h = torch.cat([feature, input_views], -1) # 第10层输入
         
             for i, l in enumerate(self.views_linears):
-                h = self.views_linears[i](h)
+                h = self.views_linears[i](h) # 第10层
                 h = F.relu(h)
 
-            rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, alpha], -1)
+            rgb = self.rgb_linear(h) # 第11层
+            outputs = torch.cat([rgb, alpha], -1) # 输出rgba
         else:
-            outputs = self.output_linear(h)
+            outputs = self.output_linear(h) # 如果没有viewdir,第8层后直接再加一层,输出rgba
 
         return outputs    
 
@@ -150,19 +156,21 @@ class NeRF(nn.Module):
 
 
 # Ray helpers
-def get_rays(H, W, K, c2w):
+def get_rays(H, W, K, c2w): # torch版本的一个相机中每一像素的坐标和方向到世界坐标系
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
+    '''上面三行应该等价于indexing = 'xy'的meshgrid'''
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    '''运用broadcast [W,H,1,3]*[3,3] 会broadcast成[W,H,3,3]*[W,H,3,3],再sum最后一维,得到rays_d为[W,H,3]'''
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
-    rays_o = c2w[:3,-1].expand(rays_d.shape)
+    rays_o = c2w[:3,-1].expand(rays_d.shape) # [3,1]->[W,H,3]
     return rays_o, rays_d
 
 
-def get_rays_np(H, W, K, c2w):
+def get_rays_np(H, W, K, c2w): # numpy版本的一个相机中每一像素的坐标和方向到世界坐标系
     i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
     dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
