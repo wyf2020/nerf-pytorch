@@ -72,6 +72,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
                   near=0., far=1.,
                   use_viewdirs=False, c2w_staticcam=None,
                   **kwargs): 
+# N条光线查询神经网络+体渲染
 # 输入一张图或世界坐标系下的N条光线, (如果是一张图则先在函数中变换到世界坐标系), 返回这N条光线对应的RGB,深度,光线被遮挡的概率,以及coarse model的RGB等包含在extras dict里的信息
     """Render rays
     Args:
@@ -429,7 +430,15 @@ def render_rays(ray_batch,
 def config_parser():
 
     import configargparse
-    parser = configargparse.ArgumentParser()
+    parser = configargparse.ArgumentParser() # 创建一个参数解析器
+    '''
+    parser.add_argument函数的参数:
+    1. 第一个参数为必选参数name or flags, 类型为字符串, 表示该选项参数的名字
+    2. help的字符串用于输入-h参数时, 显示帮助信息
+    3. type为该参数应该被读入的类型
+    4. default为默认参数
+    5. action为默认为'store', 即若输入-key value,则令key = value; 如果action = 'store_true', 则若输入-key, 则令key = True.
+    '''
     parser.add_argument('--config', is_config_file=True, 
                         help='config file path')
     parser.add_argument("--expname", type=str, 
@@ -438,76 +447,93 @@ def config_parser():
                         help='where to store ckpts and logs')
     parser.add_argument("--datadir", type=str, default='./data/llff/fern', 
                         help='input data directory')
-
+    '''
+    日志文件存在basedir/expname目录下
+    数据文件存在datadir目录下
+    '''
     # training options
-    parser.add_argument("--netdepth", type=int, default=8, 
+    parser.add_argument("--netdepth", type=int, default=8, # 输出sigma所需的隐含层数
                         help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256, 
+    parser.add_argument("--netwidth", type=int, default=256, # D个隐含层的维数W
                         help='channels per layer')
     parser.add_argument("--netdepth_fine", type=int, default=8, 
                         help='layers in fine network')
     parser.add_argument("--netwidth_fine", type=int, default=256, 
                         help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4, 
-                        help='batch size (number of random rays per gradient step)')
+    parser.add_argument("--N_rand", type=int, default=32*32*4, # batch size 训练过程中迭代一次渲染的光线数
+                        help='batch size (number of random rays per gradient step)') 
     parser.add_argument("--lrate", type=float, default=5e-4, 
                         help='learning rate')
     parser.add_argument("--lrate_decay", type=int, default=250, 
                         help='exponential learning rate decay (in 1000 steps)')
+    
+    # chunk不同于batch size. 如果batch size > chunk, 则在一次迭代中把一个batch分成(batch size)/chunk 份,分别渲染.
     parser.add_argument("--chunk", type=int, default=1024*32, 
                         help='number of rays processed in parallel, decrease if running out of memory')
+    
+    # 一次最多查询的光线数, 即神经网络输入矩阵[N*input_ch]的N
     parser.add_argument("--netchunk", type=int, default=1024*64, 
                         help='number of pts sent through network in parallel, decrease if running out of memory')
+    
+    # 每次迭代不从所有图像所有光线中取batch size条光线,而是从随机一张图像取W*H条光线
     parser.add_argument("--no_batching", action='store_true', 
                         help='only take random rays from 1 image at a time')
+
+    # 不加载check point
     parser.add_argument("--no_reload", action='store_true', 
                         help='do not reload weights from saved ckpt')
+    
+    # 加载指定的checkpoint
     parser.add_argument("--ft_path", type=str, default=None, 
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
+    '''一条光线上采样点数'''
     parser.add_argument("--N_samples", type=int, default=64, 
                         help='number of coarse samples per ray')
     parser.add_argument("--N_importance", type=int, default=0,
                         help='number of additional fine samples per ray')
+    '''perturb是采样点坐标选取时加的噪音'''
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true', 
                         help='use full 5D input instead of 3D')
     parser.add_argument("--i_embed", type=int, default=0, 
-                        help='set 0 for default positional encoding, -1 for none')
-    parser.add_argument("--multires", type=int, default=10, 
+                        help='set 0 for default positional encoding, -1 for none')# 只有0和-1两种选项
+    parser.add_argument("--multires", type=int, default=10, # position coding频率范围为[1,2^(multires-1)]
                         help='log2 of max freq for positional encoding (3D location)')
     parser.add_argument("--multires_views", type=int, default=4, 
                         help='log2 of max freq for positional encoding (2D direction)')
+    '''raw_noise_std是模型输出的alpha上加的噪音'''
     parser.add_argument("--raw_noise_std", type=float, default=0., 
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
 
-    parser.add_argument("--render_only", action='store_true', 
+    parser.add_argument("--render_only", action='store_true', # 只渲染不训练
                         help='do not optimize, reload weights and render out render_poses path')
-    parser.add_argument("--render_test", action='store_true', 
+    parser.add_argument("--render_test", action='store_true', # 只在测试集的几个视角上渲染
                         help='render the test set instead of render_poses path')
     parser.add_argument("--render_factor", type=int, default=0, 
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
     # training options
-    parser.add_argument("--precrop_iters", type=int, default=0,
+    '''前precrop_iters步迭代只在各图像中间占比precrop_frac的部分训练'''
+    parser.add_argument("--precrop_iters", type=int, default=0, 
                         help='number of steps to train on central crops')
     parser.add_argument("--precrop_frac", type=float,
                         default=.5, help='fraction of img taken for central crops') 
 
     # dataset options
     parser.add_argument("--dataset_type", type=str, default='llff', 
-                        help='options: llff / blender / deepvoxels')
+                        help='options: llff / blender / deepvoxels') # 数据格式
     parser.add_argument("--testskip", type=int, default=8, 
-                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
+                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels') # 每testskip张图像,选一张加入测试集
 
     ## deepvoxels flags
     parser.add_argument("--shape", type=str, default='greek', 
                         help='options : armchair / cube / greek / vase')
 
     ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true', 
+    parser.add_argument("--white_bkgd", action='store_true', # 图像为白色背景
                         help='set to render synthetic data on a white bkgd (always use for dvoxels)')
     parser.add_argument("--half_res", action='store_true', 
                         help='load blender synthetic data at 400x400 instead of 800x800')
@@ -515,11 +541,11 @@ def config_parser():
     ## llff flags
     parser.add_argument("--factor", type=int, default=8, 
                         help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true', 
+    parser.add_argument("--no_ndc", action='store_true', # 不用ndc坐标变换
                         help='do not use normalized device coordinates (set for non-forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true', 
+    parser.add_argument("--lindisp", action='store_true', # 线性在1/detph而不是detph里
                         help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true', 
+    parser.add_argument("--spherify", action='store_true',  # 相机位置为360度转了一圈
                         help='set for spherical 360 scenes')
     parser.add_argument("--llffhold", type=int, default=8, 
                         help='will take every 1/N images as LLFF test set, paper uses 8')
@@ -550,6 +576,12 @@ def train():
         images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
                                                                   recenter=True, bd_factor=.75,
                                                                   spherify=args.spherify)
+        '''
+        images格式为[N,H,W,3]
+        pose格式为[N,3,5], 其中[N,3,:5]为外参矩阵,[N,3,5]为hwf
+        bds格式为
+        render_poses也为[N,3,5],格式与pose一致,用于需要渲染的pose与图像的pose不一致时,指定渲染的pose
+        '''
         hwf = poses[0,:3,-1]
         poses = poses[:,:3,:4]
         print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
@@ -558,7 +590,7 @@ def train():
 
         if args.llffhold > 0:
             print('Auto LLFF holdout,', args.llffhold)
-            i_test = np.arange(images.shape[0])[::args.llffhold]
+            i_test = np.arange(images.shape[0])[::args.llffhold] # 选择测试集的图像,这里a[::c]返回a[k*c],k>=0且为整数
 
         i_val = i_test
         i_train = np.array([i for i in np.arange(int(images.shape[0])) if
@@ -616,8 +648,8 @@ def train():
         return
 
     # Cast intrinsics to right types
-    H, W, focal = hwf
-    H, W = int(H), int(W)
+    H, W, focal = hwf # hwf为[3:1]
+    H, W = int(H), int(W) # 宽和高转换为整数
     hwf = [H, W, focal]
 
     if K is None:
@@ -625,7 +657,7 @@ def train():
             [focal, 0, 0.5*W],
             [0, focal, 0.5*H],
             [0, 0, 1]
-        ])
+        ])# K为齐次坐标下的内参矩阵, (x',y',1) = K*(x,y,1), 其中x'和y'为图像中的像素坐标
 
     if args.render_test:
         render_poses = np.array(poses[i_test])
@@ -633,11 +665,11 @@ def train():
     # Create log dir and copy the config file
     basedir = args.basedir
     expname = args.expname
-    os.makedirs(os.path.join(basedir, expname), exist_ok=True)
+    os.makedirs(os.path.join(basedir, expname), exist_ok=True) # 拼接目录
     f = os.path.join(basedir, expname, 'args.txt')
     with open(f, 'w') as file:
         for arg in sorted(vars(args)):
-            attr = getattr(args, arg)
+            attr = getattr(args, arg) # 返回args对象中arg成员变量的值,赋给attr
             file.write('{} = {}\n'.format(arg, attr))
     if args.config is not None:
         f = os.path.join(basedir, expname, 'config.txt')
@@ -645,14 +677,14 @@ def train():
             file.write(open(args.config, 'r').read())
 
     # Create nerf model
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args) # 初始化或加载模型
     global_step = start
 
     bds_dict = {
         'near' : near,
         'far' : far,
     }
-    render_kwargs_train.update(bds_dict)
+    render_kwargs_train.update(bds_dict) # 向字典中添加key/value
     render_kwargs_test.update(bds_dict)
 
     # Move testing data to GPU
@@ -661,10 +693,10 @@ def train():
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
-        with torch.no_grad():
+        with torch.no_grad(): # 这里的计算不纳入计算图中计算梯度
             if args.render_test:
                 # render_test switches to test poses
-                images = images[i_test]
+                images = images[i_test] # 如果是测试，可以将测试集的图像传入render_path函数，用于计算PSNR
             else:
                 # Default is smoother render_poses path
                 images = None
@@ -675,7 +707,7 @@ def train():
 
             rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
-            imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+            imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8) # rgbs为[N，W*H,3],用于输出视频
 
             return
 
@@ -729,21 +761,21 @@ def train():
             i_batch += N_rand
             if i_batch >= rays_rgb.shape[0]:
                 print("Shuffle data after an epoch!")
-                rand_idx = torch.randperm(rays_rgb.shape[0])
+                rand_idx = torch.randperm(rays_rgb.shape[0]) # 打乱所有光线
                 rays_rgb = rays_rgb[rand_idx]
                 i_batch = 0
 
-        else:
+        else: # 不使用batch
             # Random from one image
             img_i = np.random.choice(i_train)
             target = images[img_i]
             target = torch.Tensor(target).to(device)
-            pose = poses[img_i, :3,:4]
+            pose = poses[img_i, :3,:4] # 该图像的外参矩阵
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
 
-                if i < args.precrop_iters:
+                if i < args.precrop_iters: # 仅取中心部分
                     dH = int(H//2 * args.precrop_frac)
                     dW = int(W//2 * args.precrop_frac)
                     coords = torch.stack(
@@ -780,14 +812,14 @@ def train():
             loss = loss + img_loss0
             psnr0 = mse2psnr(img_loss0)
 
-        loss.backward()
-        optimizer.step()
+        loss.backward() # 计算梯度
+        optimizer.step() # 用adam优化器计算新的参数
 
         # NOTE: IMPORTANT!
         ###   update learning rate   ###
         decay_rate = 0.1
         decay_steps = args.lrate_decay * 1000
-        new_lrate = args.lrate * (decay_rate ** (global_step / decay_steps))
+        new_lrate = args.lrate * (decay_rate ** (global_step / decay_steps)) # 每decay_steps步, learning rate衰减为原来的0.1
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
         ################################
@@ -797,7 +829,7 @@ def train():
         #####           end            #####
 
         # Rest is logging
-        if i%args.i_weights==0:
+        if i%args.i_weights==0: # 储存checkpoint
             path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
             torch.save({
                 'global_step': global_step,
@@ -807,7 +839,7 @@ def train():
             }, path)
             print('Saved checkpoints at', path)
 
-        if i%args.i_video==0 and i > 0:
+        if i%args.i_video==0 and i > 0: # 生成rgb视频和深度图(1/depth越大越白)视频
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
@@ -823,7 +855,7 @@ def train():
             #     render_kwargs_test['c2w_staticcam'] = None
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
 
-        if i%args.i_testset==0 and i > 0:
+        if i%args.i_testset==0 and i > 0: # 渲染测试集的图像并保存
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
