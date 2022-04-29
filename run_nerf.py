@@ -112,7 +112,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1,3]).float() # 如果是rays变量过来的viewdirs,则不需要reshape; 这里的reshape是为了将get_rays函数生成的 格式为[H,W,3]的rays_d转换为[H*W,3]
 
-    sh = rays_d.shape # [..., 3]
+    sh = rays_d.shape # [..., 3] 如果是c2w is not None的情况,则sh=[H,W,3]; 否则sh=[N_rays, 3]
     if ndc:
         # for forward facing scenes
         rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d) # 将每条光线的坐标从世界的xyz坐标系 变换到 世界的ndc坐标系
@@ -128,7 +128,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 
     # Render and reshape
     all_ret = batchify_rays(rays, chunk, **kwargs)
-    for k in all_ret:
+    for k in all_ret: # 用于在c2w is not none的情况下,将map从[H*W,3]恢复为[H,W,3]
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
@@ -170,7 +170,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         if savedir is not None:
             rgb8 = to8b(rgbs[-1]) # 这里to8b是自定义的lambda函数,将0-1的浮点转换为0-255的整数,用于生成图像
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
-            imageio.imwrite(filename, rgb8)
+            imageio.imwrite(filename, rgb8) # rgb8为[H,W,3]
 
 
     rgbs = np.stack(rgbs, 0) # 由于rgbs为list, 需要变成一个np.array
@@ -359,7 +359,7 @@ def render_rays(ray_batch,
     rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
     viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
     bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2])
-    near, far = bounds[...,0], bounds[...,1] # [-1,1,1] each
+    near, far = bounds[...,0], bounds[...,1] # [N,1] each
 
     t_vals = torch.linspace(0., 1., steps=N_samples)
     if not lindisp:
@@ -367,7 +367,7 @@ def render_rays(ray_batch,
     else:
         z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals)) # 使1/z_vals为[1/far,1/near]中线性的N_samples个点
 
-    z_vals = z_vals.expand([N_rays, N_samples]) # pytorch中的函数,使从[N_rays,1,Nsamples]变为[N_rays, N_samples]
+    z_vals = z_vals.expand([N_rays, N_samples]) # pytorch中的函数,强调z_vals的shape为[N_rays, N_samples]
 
     if perturb > 0.:
         # get intervals between samples
@@ -579,7 +579,7 @@ def train():
         '''
         images格式为[N,H,W,3]
         pose格式为[N,3,5], 其中[N,3,:5]为外参矩阵,[N,3,5]为hwf
-        bds格式为
+        bds格式为[2,N]
         render_poses也为[N,3,5],格式与pose一致,用于需要渲染的pose与图像的pose不一致时,指定渲染的pose
         '''
         hwf = poses[0,:3,-1]
@@ -594,7 +594,7 @@ def train():
 
         i_val = i_test
         i_train = np.array([i for i in np.arange(int(images.shape[0])) if
-                        (i not in i_test and i not in i_val)])
+                        (i not in i_test and i not in i_val)]) # 除validation和test集的均为train集
 
         print('DEFINING BOUNDS')
         if args.no_ndc:
@@ -667,11 +667,13 @@ def train():
     expname = args.expname
     os.makedirs(os.path.join(basedir, expname), exist_ok=True) # 拼接目录
     f = os.path.join(basedir, expname, 'args.txt')
-    with open(f, 'w') as file:
+    with open(f, 'w') as file: # with...as...防止写入时出现异常导致程序终止
+        '''把所有参数写入日志目录里的args.txt'''
         for arg in sorted(vars(args)):
             attr = getattr(args, arg) # 返回args对象中arg成员变量的值,赋给attr
             file.write('{} = {}\n'.format(arg, attr))
     if args.config is not None:
+        '''用于把args.config文件复制到日志目录里的config.txt'''
         f = os.path.join(basedir, expname, 'config.txt')
         with open(f, 'w') as file:
             file.write(open(args.config, 'r').read())
@@ -748,7 +750,7 @@ def train():
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
     
     start = start + 1
-    for i in trange(start, N_iters):
+    for i in trange(start, N_iters): # trange(N) can be also used as a convenient shortcut for tqdm(range(N))
         time0 = time.time()
 
         # Sample random ray batch
@@ -756,7 +758,7 @@ def train():
             # Random over all images
             batch = rays_rgb[i_batch:i_batch+N_rand] # [B, 2+1, 3*?]
             batch = torch.transpose(batch, 0, 1)
-            batch_rays, target_s = batch[:2], batch[2]
+            batch_rays, target_s = batch[:2], batch[2] # 分开ro rd和gt的image
 
             i_batch += N_rand
             if i_batch >= rays_rgb.shape[0]:
@@ -765,7 +767,7 @@ def train():
                 rays_rgb = rays_rgb[rand_idx]
                 i_batch = 0
 
-        else: # 不使用batch
+        else: # 不使用batch,则每次迭代随机选1张图中的随机N_rand条光线
             # Random from one image
             img_i = np.random.choice(i_train)
             target = images[img_i]
@@ -789,7 +791,7 @@ def train():
                     coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
 
                 coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
-                select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+                select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,) # 如果replace=True,则一个坐标可以被选择多次
                 select_coords = coords[select_inds].long()  # (N_rand, 2)
                 rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
                 rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
@@ -801,13 +803,13 @@ def train():
                                                 verbose=i < 10, retraw=True,
                                                 **render_kwargs_train)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad() # 清零梯度
         img_loss = img2mse(rgb, target_s)
-        trans = extras['raw'][...,-1]
+        trans = extras['raw'][...,-1] # model的第4维输出,即alpha
         loss = img_loss
         psnr = mse2psnr(img_loss)
 
-        if 'rgb0' in extras:
+        if 'rgb0' in extras: # coarse model也需要计算loss function,否则coarse model参数会一直不变
             img_loss0 = img2mse(extras['rgb0'], target_s)
             loss = loss + img_loss0
             psnr0 = mse2psnr(img_loss0)

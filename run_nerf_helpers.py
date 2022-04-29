@@ -157,16 +157,16 @@ class NeRF(nn.Module):
 
 # Ray helpers
 def get_rays(H, W, K, c2w): # torch版本的一个相机中每一像素的坐标和方向到世界坐标系
-    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid 目前默认 indexing='ij', 未来版本可能会和numpy一样默认'xy'
     i = i.t()
     j = j.t()
-    '''上面三行应该等价于indexing = 'xy'的meshgrid'''
+    '''上面三行应该等价于indexing = 'xy'的meshgrid, 所以i,j的shape为[H,W]'''
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
-    '''运用broadcast [W,H,1,3]*[3,3] 会broadcast成[W,H,3,3]*[W,H,3,3],再sum最后一维,得到rays_d为[W,H,3]'''
+    '''运用broadcast [H,W,1,3]*[3,3] 会broadcast成[H,W,3,3]*[H,W,3,3],再sum最后一维,得到rays_d为[H,W,3]'''
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
-    rays_o = c2w[:3,-1].expand(rays_d.shape) # [3,1]->[W,H,3]
+    rays_o = c2w[:3,-1].expand(rays_d.shape) # [3,1]->[H,W,3]
     return rays_o, rays_d
 
 

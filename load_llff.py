@@ -29,12 +29,12 @@ def _minify(basedir, factors=[], resolutions=[]):
     wd = os.getcwd()
 
     for r in factors + resolutions:
-        if isinstance(r, int):
+        if isinstance(r, int): # 即r为factor
             name = 'images_{}'.format(r)
-            resizearg = '{}%'.format(100./r)
-        else:
+            resizearg = '{}%'.format(100./r) # eg: magick mogrify -resize 50%
+        else: # r为resolution
             name = 'images_{}x{}'.format(r[1], r[0])
-            resizearg = '{}x{}'.format(r[1], r[0])
+            resizearg = '{}x{}'.format(r[1], r[0]) # eg: magick mogrify -resize 256*256
         imgdir = os.path.join(basedir, name)
         if os.path.exists(imgdir):
             continue
@@ -44,14 +44,14 @@ def _minify(basedir, factors=[], resolutions=[]):
         os.makedirs(imgdir)
         check_output('cp {}/* {}'.format(imgdir_orig, imgdir), shell=True)
         
-        ext = imgs[0].split('.')[-1]
-        args = ' '.join(['mogrify', '-resize', resizearg, '-format', 'png', '*.{}'.format(ext)])
+        ext = imgs[0].split('.')[-1] # 用于获得文件后缀名
+        args = ' '.join(['mogrify', '-resize', resizearg, '-format', 'png', '*.{}'.format(ext)]) #ext为原格式,png为目标格式
         print(args)
         os.chdir(imgdir)
         check_output(args, shell=True)
         os.chdir(wd)
         
-        if ext != 'png':
+        if ext != 'png': # mogrify 如果原格式和目标格式不同,则不会修改原文件,而是创建新文件;否则会修改原文件
             check_output('rm {}/*.{}'.format(imgdir, ext), shell=True)
             print('Removed duplicates')
         print('Done')
@@ -60,17 +60,17 @@ def _minify(basedir, factors=[], resolutions=[]):
         
         
 def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
-    
+    '''poses_bounds.npy[N,3*5+2],其中最后一维前4列是相机位姿矩阵; 第5列是H,W,f; 6、7列是根据pts3d估计出来的边界'''
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
-    poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0])
-    bds = poses_arr[:, -2:].transpose([1,0])
+    poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0]) # poses[3,5,N]
+    bds = poses_arr[:, -2:].transpose([1,0]) # bds[2,N]
     
     img0 = [os.path.join(basedir, 'images', f) for f in sorted(os.listdir(os.path.join(basedir, 'images'))) \
             if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')][0]
-    sh = imageio.imread(img0).shape
+    sh = imageio.imread(img0).shape # sh=[height, weight]
     
     sfx = ''
-    
+    '''三种minify图像的方法:设定缩小因子,设定等比例放缩的目标高或宽'''
     if factor is not None:
         sfx = '_{}'.format(factor)
         _minify(basedir, factors=[factor])
@@ -89,30 +89,31 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         factor = 1
     
     imgdir = os.path.join(basedir, 'images' + sfx)
-    if not os.path.exists(imgdir):
+    if not os.path.exists(imgdir): # minify失败
         print( imgdir, 'does not exist, returning' )
         return
     
     imgfiles = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
-    if poses.shape[-1] != len(imgfiles):
+    if poses.shape[-1] != len(imgfiles): # 相机标注数据数量与实际图片个数不同
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
         return
     
     sh = imageio.imread(imgfiles[0]).shape
-    poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])
-    poses[2, 4, :] = poses[2, 4, :] * 1./factor
+    '''这里poses[:2, 4, :].shape=(2,N); np.array(sh[:2]).reshape([2, 1]).shape = (2,1), 所以赋值时发生broadcast'''
+    poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1]) # 修改H,W
+    poses[2, 4, :] = poses[2, 4, :] * 1./factor # f = f / factor
     
     if not load_imgs:
         return poses, bds
     
     def imread(f):
         if f.endswith('png'):
-            return imageio.imread(f, ignoregamma=True)
+            return imageio.imread(f, ignoregamma=True) # 读入png文件的gamma correction信息
         else:
             return imageio.imread(f)
         
-    imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles]
-    imgs = np.stack(imgs, -1)  
+    imgs = imgs = [imread(f)[...,:3]/255. for f in imgfiles] # 需要把rgb映射到[0,1]
+    imgs = np.stack(imgs, -1)  # imgs[H,W,3,N]
     
     print('Loaded image data', imgs.shape, poses[:,-1,0])
     return poses, bds, imgs
@@ -128,8 +129,8 @@ def normalize(x):
 def viewmatrix(z, up, pos):
     vec2 = normalize(z)
     vec1_avg = up
-    vec0 = normalize(np.cross(vec1_avg, vec2))
-    vec1 = normalize(np.cross(vec2, vec0))
+    vec0 = normalize(np.cross(vec1_avg, vec2)) # 叉乘得到vec0为x轴
+    vec1 = normalize(np.cross(vec2, vec0)) # 再得到y轴
     m = np.stack([vec0, vec1, vec2, pos], 1)
     return m
 
@@ -141,9 +142,9 @@ def poses_avg(poses):
 
     hwf = poses[0, :3, -1:]
 
-    center = poses[:, :3, 3].mean(0)
-    vec2 = normalize(poses[:, :3, 2].sum(0))
-    up = poses[:, :3, 1].sum(0)
+    center = poses[:, :3, 3].mean(0) # xyz求平均
+    vec2 = normalize(poses[:, :3, 2].sum(0)) # 各坐标系z轴在世界坐标系中的坐标求平均
+    up = poses[:, :3, 1].sum(0) # y轴求和
     c2w = np.concatenate([viewmatrix(vec2, up, center), hwf], 1)
     
     return c2w
@@ -165,14 +166,14 @@ def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
 
 def recenter_poses(poses):
 
-    poses_ = poses+0
+    poses_ = poses+0 # 用于不改变hwf
     bottom = np.reshape([0,0,0,1.], [1,4])
     c2w = poses_avg(poses)
     c2w = np.concatenate([c2w[:3,:4], bottom], -2)
     bottom = np.tile(np.reshape(bottom, [1,1,4]), [poses.shape[0],1,1])
     poses = np.concatenate([poses[:,:3,:4], bottom], -2)
 
-    poses = np.linalg.inv(c2w) @ poses
+    poses = np.linalg.inv(c2w) @ poses # w2c*poses 把所有的poses从c2w变成c2c, 即从各图像的相机坐标系变换成平均相机坐标系(新的世界坐标系)
     poses_[:,:3,:4] = poses[:,:3,:4]
     poses = poses_
     return poses
@@ -183,12 +184,12 @@ def recenter_poses(poses):
 
 def spherify_poses(poses, bds):
     
-    p34_to_44 = lambda p : np.concatenate([p, np.tile(np.reshape(np.eye(4)[-1,:], [1,1,4]), [p.shape[0], 1,1])], 1)
+    p34_to_44 = lambda p : np.concatenate([p, np.tile(np.reshape(np.eye(4)[-1,:], [1,1,4]), [p.shape[0], 1,1])], 1) # 从[N,3,4]添加[0,0,0,1]变成[N,4,4]
     
-    rays_d = poses[:,:3,2:3]
+    rays_d = poses[:,:3,2:3] # 选取各相机z轴
     rays_o = poses[:,:3,3:4]
 
-    def min_line_dist(rays_o, rays_d):
+    def min_line_dist(rays_o, rays_d): # 返回距离N个z轴直线最短的点作为新世界坐标系的原点
         A_i = np.eye(3) - rays_d * np.transpose(rays_d, [0,2,1])
         b_i = -A_i @ rays_o
         pt_mindist = np.squeeze(-np.linalg.inv((np.transpose(A_i, [0,2,1]) @ A_i).mean(0)) @ (b_i).mean(0))
@@ -205,26 +206,27 @@ def spherify_poses(poses, bds):
     pos = center
     c2w = np.stack([vec1, vec2, vec0, pos], 1)
 
-    poses_reset = np.linalg.inv(p34_to_44(c2w[None])) @ p34_to_44(poses[:,:3,:4])
+    poses_reset = np.linalg.inv(p34_to_44(c2w[None])) @ p34_to_44(poses[:,:3,:4]) # 将世界坐标系变为c2w(平均相机坐标系)
 
-    rad = np.sqrt(np.mean(np.sum(np.square(poses_reset[:,:3,3]), -1)))
+    rad = np.sqrt(np.mean(np.sum(np.square(poses_reset[:,:3,3]), -1))) # 到中心平均距离作为半径
     
+    '''令半径平均为1'''
     sc = 1./rad
     poses_reset[:,:3,3] *= sc
     bds *= sc
     rad *= sc
     
-    centroid = np.mean(poses_reset[:,:3,3], 0)
-    zh = centroid[2]
-    radcircle = np.sqrt(rad**2-zh**2)
+    centroid = np.mean(poses_reset[:,:3,3], 0) # 求各相机坐标中心
+    zh = centroid[2] # 这里zh不一定为0
+    radcircle = np.sqrt(rad**2-zh**2) # 各相机柱面坐标系下的半径
     new_poses = []
     
     for th in np.linspace(0.,2.*np.pi, 120):
 
-        camorigin = np.array([radcircle * np.cos(th), radcircle * np.sin(th), zh])
-        up = np.array([0,0,-1.])
+        camorigin = np.array([radcircle * np.cos(th), radcircle * np.sin(th), zh]) # 渲染相机位置坐标取柱面上等半径一圈120个点
+        up = np.array([0,0,-1.]) # 所有y轴取[0,0,-1]
 
-        vec2 = normalize(camorigin)
+        vec2 = normalize(camorigin) # 相机朝着原点,所以z轴在世界坐标系即为相机的位置坐标
         vec0 = normalize(np.cross(vec2, up))
         vec1 = normalize(np.cross(vec2, vec0))
         pos = camorigin
@@ -232,10 +234,10 @@ def spherify_poses(poses, bds):
 
         new_poses.append(p)
 
-    new_poses = np.stack(new_poses, 0)
+    new_poses = np.stack(new_poses, 0) # 从list变为nparray
     
-    new_poses = np.concatenate([new_poses, np.broadcast_to(poses[0,:3,-1:], new_poses[:,:3,-1:].shape)], -1)
-    poses_reset = np.concatenate([poses_reset[:,:3,:4], np.broadcast_to(poses[0,:3,-1:], poses_reset[:,:3,-1:].shape)], -1)
+    new_poses = np.concatenate([new_poses, np.broadcast_to(poses[0,:3,-1:], new_poses[:,:3,-1:].shape)], -1) # 在待渲染的poses矩阵上添加hwf
+    poses_reset = np.concatenate([poses_reset[:,:3,:4], np.broadcast_to(poses[0,:3,-1:], poses_reset[:,:3,-1:].shape)], -1) # 修正后的pose上添加hwf
     
     return poses_reset, new_poses, bds
     
@@ -247,13 +249,14 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     print('Loaded', basedir, bds.min(), bds.max())
     
     # Correct rotation matrix ordering and move variable dim to axis 0
-    poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
-    poses = np.moveaxis(poses, -1, 0).astype(np.float32)
-    imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
+    poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1) # 相机坐标系变换到openGL格式下,由x down,y right,z backward变换为x right, y up, z backward
+    poses = np.moveaxis(poses, -1, 0).astype(np.float32) # poses[N,3,5]
+    imgs = np.moveaxis(imgs, -1, 0).astype(np.float32) #imgs[N,H,W,3]
     images = imgs
-    bds = np.moveaxis(bds, -1, 0).astype(np.float32)
+    bds = np.moveaxis(bds, -1, 0).astype(np.float32) # bds[2,N]
     
     # Rescale if bd_factor is provided
+    '''1/bds.min() 使near为1; bd_factor保证near比1还大一些,使得后续near取1时一定是下界'''
     sc = 1. if bd_factor is None else 1./(bds.min() * bd_factor)
     poses[:,:3,3] *= sc
     bds *= sc
@@ -307,7 +310,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     print(poses.shape, images.shape, bds.shape)
     
     dists = np.sum(np.square(c2w[:3,3] - poses[:,:3,3]), -1)
-    i_test = np.argmin(dists)
+    i_test = np.argmin(dists) # 便于后续auto llff holdout选取测试集时多个图像到中心距离分布均匀
     print('HOLDOUT view is', i_test)
     
     images = images.astype(np.float32)
