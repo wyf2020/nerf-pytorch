@@ -115,6 +115,13 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     sh = rays_d.shape # [..., 3] 如果是c2w is not None的情况,则sh=[H,W,3]; 否则sh=[N_rays, 3]
     if ndc:
         # for forward facing scenes
+        '''
+        这里ndc_rays默认near=1, far=infinity, 这是因为在load_llf.py的load_llff_data中利用bds和bd_factor对poses坐标进行了rescale, 
+        保证所有3d points的z值一定都在near=1和far=infinity之间
+        这里根据no_ndc参数是否为true有两种可能:
+        1. no_ndc = true, 并且这里应该要配合lindisp=true使用, 即不经过ndc变换, 所有3d点z值均为[1,infinity], 并且在1/z上线性采样,范围为[1,infinity],即越远采样越稀疏
+        2. no_ndc = false, 这里配合lindisp的默认值false使用, 即经过ndc变换, 所有3d点z值均为[0,1], 并且在z上线性采样,范围为[0,1], 实际在ndc变换前的坐标系中也是越远采样越稀疏
+        '''
         rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d) # 将每条光线的坐标从世界的xyz坐标系 变换到 世界的ndc坐标系
 
     # Create ray batch
@@ -579,7 +586,7 @@ def train():
         '''
         images格式为[N,H,W,3]
         pose格式为[N,3,5], 其中[N,3,:5]为外参矩阵,[N,3,5]为hwf
-        bds格式为[2,N]
+        bds格式为[2,N], bds在train中其实已经没有用了, 后续调用函数时, 所有near,far均使用默认参数. bds主要用途是在load_llff_data中对坐标进行rescale
         render_poses也为[N,3,5],格式与pose一致,用于需要渲染的pose与图像的pose不一致时,指定渲染的pose
         '''
         hwf = poses[0,:3,-1]

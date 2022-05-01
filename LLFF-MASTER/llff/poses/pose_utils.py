@@ -143,7 +143,7 @@ def minify_v0(basedir, factors=[], resolutions=[]):
             
 
 
-
+'''和load_llff.py中的_minify()一样'''
 def minify(basedir, factors=[], resolutions=[]):
     needtoload = False
     for r in factors:
@@ -197,7 +197,7 @@ def minify(basedir, factors=[], resolutions=[]):
             
         
         
-        
+'''和load_llff.py中的_load_data()一致'''
 def load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
@@ -276,9 +276,9 @@ def gen_poses(basedir, match_type, factors=None):
         
     print( 'Post-colmap')
     
-    poses, pts3d, perm = load_colmap_data(basedir)
+    poses, pts3d, perm = load_colmap_data(basedir) # 调用colmap函数 读取colmap格式标注 并由OpenCV坐标变换成中间坐标
     
-    save_poses(basedir, poses, pts3d, perm)
+    save_poses(basedir, poses, pts3d, perm) # 存进poses_bounds.npy
     
     if factors is not None:
         print( 'Factors:', factors)

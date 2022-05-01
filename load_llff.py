@@ -150,7 +150,7 @@ def poses_avg(poses):
     return c2w
 
 
-
+'''生成螺旋线轨迹'''
 def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
     render_poses = []
     rads = np.array(list(rads) + [1.])
@@ -278,10 +278,10 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         up = normalize(poses[:, :3, 1].sum(0))
 
         # Find a reasonable "focus depth" for this dataset
-        close_depth, inf_depth = bds.min()*.9, bds.max()*5.
+        close_depth, inf_depth = bds.min()*.9, bds.max()*5. # 所有3d点z值保守的上下界
         dt = .75
         mean_dz = 1./(((1.-dt)/close_depth + dt/inf_depth))
-        focal = mean_dz
+        focal = mean_dz # 根据3d点的z值 非常粗糙地估计即将生成的螺旋线轨迹的焦距
 
         # Get radii for spiral path
         shrink_factor = .8
