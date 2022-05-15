@@ -13,7 +13,7 @@ def load_dv_data(scene='cube', basedir='/data/deepvoxels', testskip=8):
             grid_barycenter = np.array(list(map(float, file.readline().split())))
             near_plane = float(file.readline())
             scale = float(file.readline())
-            height, width = map(float, file.readline().split())
+            height, width = map(float, file.readline().split()) # cx,cy对应height和width; 但cx cy单位应该是长度,height width单位应该是像素
 
             try:
                 world2cam_poses = int(file.readline())
@@ -56,13 +56,13 @@ def load_dv_data(scene='cube', basedir='/data/deepvoxels', testskip=8):
     W = 512
     deepvoxels_base = '{}/train/{}/'.format(basedir, scene)
 
-    full_intrinsic, grid_barycenter, scale, near_plane, world2cam_poses = parse_intrinsics(os.path.join(deepvoxels_base, 'intrinsics.txt'), H)
+    full_intrinsic, grid_barycenter, scale, near_plane, world2cam_poses = parse_intrinsics(os.path.join(deepvoxels_base, 'intrinsics.txt'), H) # 除了full_intrinsic以外其他四个返回值全都没用到, 读取的信息仅为HWf
     print(full_intrinsic, grid_barycenter, scale, near_plane, world2cam_poses)
     focal = full_intrinsic[0,0]
     print(H, W, focal)
 
     
-    def dir2poses(posedir):
+    def dir2poses(posedir): # 变换坐标系, 将yz两轴反向
         poses = np.stack([load_pose(os.path.join(posedir, f)) for f in sorted(os.listdir(posedir)) if f.endswith('txt')], 0)
         transf = np.array([
             [1,0,0,0],
@@ -95,7 +95,7 @@ def load_dv_data(scene='cube', basedir='/data/deepvoxels', testskip=8):
     
     all_imgs = [imgs, valimgs, testimgs]
     counts = [0] + [x.shape[0] for x in all_imgs]
-    counts = np.cumsum(counts)
+    counts = np.cumsum(counts) # 求前缀和
     i_split = [np.arange(counts[i], counts[i+1]) for i in range(3)]
     
     imgs = np.concatenate(all_imgs, 0)

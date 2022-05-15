@@ -55,7 +55,7 @@ def load_colmap_data(realdir):
 
 
 def save_poses(basedir, poses, pts3d, perm):
-    '''points3d中每行内容为POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)'''
+    '''points3d文件中每行内容为POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)'''
     '''pose[3,5,N], perm[N]'''
     pts_arr = []
     vis_arr = []
@@ -74,6 +74,12 @@ def save_poses(basedir, poses, pts3d, perm):
     print( 'Points', pts_arr.shape, 'Visibility', vis_arr.shape )
     
     zvals = np.sum(-(pts_arr[:, np.newaxis, :].transpose([2,0,1]) - poses[:3, 3:4, :]) * poses[:3, 2:3, :], 0) # zvals[M,N]
+    '''
+    (pts_arr[:, np.newaxis, :].transpose([2,0,1]) - poses[:3, 3:4, :]) 的shape为[3,M,N],为M个3d点相对于N个相机坐标系原点的M*N个delta向量
+    np.sum(-(pts_arr[:, np.newaxis, :].transpose([2,0,1]) - poses[:3, 3:4, :]) * poses[:3, 2:3, :], 0)
+    是M*N个delta向量分别与N个相机坐标系的z轴点乘,得到M*N个delta向量在N革相机坐标系z轴的投影长度
+    之所以sum里需要加"-" 是因为这里的坐标系为(x down, y right, z backward), z轴朝后. 加"-"可以让投影结果为正
+    '''
     valid_z = zvals[vis_arr==1] # zvals[M,N]有M行,每一行是一个3d点,每个3d点只取能看见该点图像对应的列
     print( 'Depth stats', valid_z.min(), valid_z.max(), valid_z.mean() )
     

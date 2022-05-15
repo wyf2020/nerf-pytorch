@@ -61,6 +61,11 @@ def _minify(basedir, factors=[], resolutions=[]):
         
 def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     '''poses_bounds.npy[N,3*5+2],其中最后一维前4列是相机位姿矩阵; 第5列是H,W,f; 6、7列是根据pts3d估计出来的边界'''
+    '''
+    npy和npz格式的文件为numpy的数据,其中npy为单个array,npz为一个字典
+    e.g. np.save('文件名.npy', np.array([1,2])) 
+         a = np.load('文件名.npy')
+    '''
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
     poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0]) # poses[3,5,N]
     bds = poses_arr[:, -2:].transpose([1,0]) # bds[2,N]
@@ -102,6 +107,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     '''这里poses[:2, 4, :].shape=(2,N); np.array(sh[:2]).reshape([2, 1]).shape = (2,1), 所以赋值时发生broadcast'''
     poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1]) # 修改H,W
     poses[2, 4, :] = poses[2, 4, :] * 1./factor # f = f / factor
+    # 如果这里的图像处理是截取中心H,W部分,那么f不用乘(1/factor), 但是这里的图像处理是下采样,如果f不乘(1/factor) 那么投影变换的逆变换 x/z != w/(2*f)
     
     if not load_imgs:
         return poses, bds
@@ -130,7 +136,7 @@ def viewmatrix(z, up, pos):
     vec2 = normalize(z)
     vec1_avg = up
     vec0 = normalize(np.cross(vec1_avg, vec2)) # 叉乘得到vec0为x轴
-    vec1 = normalize(np.cross(vec2, vec0)) # 再得到y轴
+    vec1 = normalize(np.cross(vec2, vec0)) # 再得到y轴 因为y和z都是平均得到的, 如果直接采用平均的y, 可能会y轴和z轴不垂直
     m = np.stack([vec0, vec1, vec2, pos], 1)
     return m
 
@@ -157,8 +163,8 @@ def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
     hwf = c2w[:,4:5]
     
     for theta in np.linspace(0., 2. * np.pi * rots, N+1)[:-1]:
-        c = np.dot(c2w[:3,:4], np.array([np.cos(theta), -np.sin(theta), -np.sin(theta*zrate), 1.]) * rads) 
-        z = normalize(c - np.dot(c2w[:3,:4], np.array([0,0,-focal, 1.])))
+        c = np.dot(c2w[:3,:4], np.array([np.cos(theta), -np.sin(theta), -np.sin(theta*zrate), 1.]) * rads) # xyz方向各自的振幅分别取 大于90%相机原点的值
+        z = normalize(c - np.dot(c2w[:3,:4], np.array([0,0,-focal, 1.]))) # 这里focal为之前根据3d点的上下界估计出来的物体中心的z值, 所以这里相机的朝向是从螺旋线上的各个点面向该中心
         render_poses.append(np.concatenate([viewmatrix(z, up, c), hwf], 1))
     return render_poses
     
@@ -226,7 +232,7 @@ def spherify_poses(poses, bds):
         camorigin = np.array([radcircle * np.cos(th), radcircle * np.sin(th), zh]) # 渲染相机位置坐标取柱面上等半径一圈120个点
         up = np.array([0,0,-1.]) # 所有y轴取[0,0,-1]
 
-        vec2 = normalize(camorigin) # 相机朝着原点,所以z轴在世界坐标系即为相机的位置坐标
+        vec2 = normalize(camorigin) # 相机朝着原点,且z为backward,所以z轴在世界坐标系即为相机的位置坐标
         vec0 = normalize(np.cross(vec2, up))
         vec1 = normalize(np.cross(vec2, vec0))
         pos = camorigin
@@ -249,11 +255,11 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
     print('Loaded', basedir, bds.min(), bds.max())
     
     # Correct rotation matrix ordering and move variable dim to axis 0
-    poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1) # 相机坐标系变换到openGL格式下,由x down,y right,z backward变换为x right, y up, z backward
+    poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1) # 相机坐标系变换到openGL格式下,由[x down,y right,z backward]变换为[x right, y up, z backward] 
     poses = np.moveaxis(poses, -1, 0).astype(np.float32) # poses[N,3,5]
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32) #imgs[N,H,W,3]
     images = imgs
-    bds = np.moveaxis(bds, -1, 0).astype(np.float32) # bds[2,N]
+    bds = np.moveaxis(bds, -1, 0).astype(np.float32) # bds[N,2]
     
     # Rescale if bd_factor is provided
     '''1/bds.min() 使near为1; bd_factor保证near比1还大一些,使得后续near取1时一定是下界'''
@@ -287,7 +293,7 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         shrink_factor = .8
         zdelta = close_depth * .2
         tt = poses[:,:3,3] # ptstocam(poses[:3,3,:].T, c2w).T
-        rads = np.percentile(np.abs(tt), 90, 0)
+        rads = np.percentile(np.abs(tt), 90, 0) # rads为[3], 在xyz值上分别大于90%相机原点
         c2w_path = c2w
         N_views = 120
         N_rots = 2

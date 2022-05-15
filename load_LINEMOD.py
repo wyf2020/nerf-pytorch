@@ -33,7 +33,10 @@ def pose_spherical(theta, phi, radius):
     c2w = torch.Tensor(np.array([[-1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]])) @ c2w
     return c2w
 
-
+'''
+linemod和blender数据比较像,但是每个"frame"元素中多了intrinsic_matrix,这样就不用从相机视角和W来计算focal
+同时每个json文件除了frame以外,还多了near和far数组,用来计算near和far
+'''
 def load_LINEMOD_data(basedir, half_res=False, testskip=1):
     splits = ['train', 'val', 'test']
     metas = {}

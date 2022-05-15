@@ -116,7 +116,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     if ndc:
         # for forward facing scenes
         '''
-        这里ndc_rays默认near=1, far=infinity, 这是因为在load_llf.py的load_llff_data中利用bds和bd_factor对poses坐标进行了rescale, 
+        这里ndc_rays默认near=1, far=infinity, 这是因为在load_llff.py的load_llff_data中利用bds和bd_factor对poses坐标进行了rescale, 
         保证所有3d points的z值一定都在near=1和far=infinity之间
         这里根据no_ndc参数是否为true有两种可能:
         1. no_ndc = true, 并且这里应该要配合lindisp=true使用, 即不经过ndc变换, 所有3d点z值均为[1,infinity], 并且在1/z上线性采样,范围为[1,infinity],即越远采样越稀疏
@@ -586,7 +586,8 @@ def train():
         '''
         images格式为[N,H,W,3]
         pose格式为[N,3,5], 其中[N,3,:5]为外参矩阵,[N,3,5]为hwf
-        bds格式为[2,N], bds在train中其实已经没有用了, 后续调用函数时, 所有near,far均使用默认参数. bds主要用途是在load_llff_data中对坐标进行rescale
+        bds格式为[N,2], 如果是ndc坐标,bds在train中其实已经没有用了, 后续调用函数时, 所有near,far均使用默认参数. bds主要用途是在load_llff_data中对坐标进行rescale; 
+        但如果不是ndc坐标后续用bds计算near和far便于在render_rays中确定线性取值范围
         render_poses也为[N,3,5],格式与pose一致,用于需要渲染的pose与图像的pose不一致时,指定渲染的pose
         '''
         hwf = poses[0,:3,-1]
@@ -622,7 +623,7 @@ def train():
         far = 6.
 
         if args.white_bkgd:
-            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:]) # 最后一维为不透明度alpha, "+透明的概率*[1,1,1]"等于加上了白色背景
         else:
             images = images[...,:3]
 
@@ -646,8 +647,8 @@ def train():
         print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
-        near = hemi_R-1.
+        hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1)) # 相机位于一个半径为R的半球上
+        near = hemi_R-1. # 物体有固定的边界, 在半径为1的球中
         far = hemi_R+1.
 
     else:
